@@ -12,7 +12,6 @@ db = conect_to_firestoreDataBase()
 async def  run_cron_verify_id():
     try:
         query = db.collection("request").where(filter=FieldFilter("status", "==", "pending"))
-        results = query.stream()
         results_list = list(query.stream())
         
         # Check if there are any pending requests
@@ -20,7 +19,7 @@ async def  run_cron_verify_id():
             print("No pending requests found.")
             return {"message": "No pending requests found."}
 
-        for pending_request in results:
+        for pending_request in results_list:
             doc_ref = db.collection("request").document(pending_request.id)
             print(f"Starting execution for the request: {pending_request.id}")
             # update the status to "started"

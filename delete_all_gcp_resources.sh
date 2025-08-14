@@ -60,6 +60,12 @@ if ! gcloud services list --enabled --project=$PROJECT_ID | grep -q "cloudschedu
   gcloud services enable cloudscheduler.googleapis.com --project=$PROJECT_ID
 fi
 
+echo "⏳ Esperando hasta que la API esté habilitada completamente..."
+until gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" | grep -Fxq "cloudscheduler.googleapis.com"; do
+  echo "⏱️ Aún no está habilitada... esperando 5s"
+  sleep 5
+done
+
 # Eliminar job de Cloud Scheduler si existe
 echo "🗓️  Verificando existencia del job 'cronVerifyId'..."
 if gcloud scheduler jobs describe cronVerifyId --location=$REGION &> /dev/null; then

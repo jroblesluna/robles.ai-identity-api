@@ -103,23 +103,27 @@ gcloud run deploy "$SERVICE_NAME" \
   --memory=4Gi
 
 # ──────── ENABLE CLOUD SCHEDULER ────────
-echo "🔒 Habilitando API de Cloud Scheduler..."
-gcloud services enable cloudscheduler.googleapis.com --project=$PROJECT_ID
-echo "⏳ Esperando unos segundos para propagación de API..."
-sleep 5
+# echo "🔒 Habilitando API de Cloud Scheduler..."
+# gcloud services enable cloudscheduler.googleapis.com --project=$PROJECT_ID
+
+# echo "⏳ Esperando hasta que la API esté habilitada completamente..."
+# until gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" | grep -Fxq "cloudscheduler.googleapis.com"; do
+#   echo "⏱️ Aún no está habilitada... esperando 5s"
+#   sleep 5
+# done
 
 # ──────── CREAR JOB DE CLOUD SCHEDULER ────────
-echo "🔒 Creando job de Cloud Scheduler..."
-DEPLOYED_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --format='value(status.url)')
+# echo "🔒 Creando job de Cloud Scheduler..."
+# DEPLOYED_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --format='value(status.url)')
 
-gcloud scheduler jobs create http cronVerifyId \
-  --schedule="* * * * *" \
-  --uri="$DEPLOYED_URL/cron/verify-id" \
-  --http-method=POST \
-  --time-zone="America/Los_Angeles" \
-  --message-body="{}" \
-  --oidc-service-account-email=$CLOUD_RUN_SA_EMAIL \
-  --location=$REGION
+# gcloud scheduler jobs create http cronVerifyId \
+#   --schedule="* * * * *" \
+#   --uri="$DEPLOYED_URL/cron/verify-id" \
+#   --http-method=POST \
+#   --time-zone="America/Los_Angeles" \
+#   --message-body="{}" \
+#   --oidc-service-account-email=$CLOUD_RUN_SA_EMAIL \
+#   --location=$REGION
 
 echo "🌐 Configurando domain mapping $DOMAIN → $SERVICE_NAME..."
 
