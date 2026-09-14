@@ -86,7 +86,7 @@ image URLs: `FaceImageCV2`, `CardImageCV2`, `FaceLandMarksImage`,
 - **`GCP_SA_KEY`** — a **GitHub Actions** secret (not in GCP). Key for the
   `github-deployer` SA that lets CI/CD deploy. Set via `gh secret set`.
 
-Full GCP inventory + recreate-from-scratch runbook: see **INFRASTRUCTURE.md**.
+Full GCP resource inventory + recreate-from-scratch runbook: see sections 12–13 below.
 
 ## 6. Security posture (added 2026-09)
 
@@ -127,7 +127,7 @@ cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
   `requirements.txt` rebuilds deps + model.
 - **CI/CD**: `.github/workflows/deploy.yml` runs on push to `main` → Cloud Build
   builds the image (tags `:$GITHUB_SHA` and `:latest`) → `gcloud run deploy`.
-  Requires the `GCP_SA_KEY` GitHub secret (setup in DEPLOYMENT.md).
+  Requires the `GCP_SA_KEY` GitHub secret (setup steps in README → Deployment).
 - Deploy flags fixed by the workflow: `--memory=4Gi`, `--max-instances=2`,
   `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS` env, secret `FIREBASE_KEY:1`.
 - Legacy scripts: `deploy_fresh_gcp.sh` (full provisioning), `update_docker.sh`
@@ -154,10 +154,108 @@ cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
   uploads images to Firebase Storage. i18n keys under `try-identity` in
   `src/i18n/locales/{en,es}/translation.json`.
 
+## 12. GCP resource inventory (disaster recovery)
+
+Verified against the live project on 2026-09-13.
+
+| Item | Value |
+|------|-------|
+| GCP project ID | `identityverifierapp` |
+| Region | `us-central1` |
+| Billing | **Blaze (pay-as-you-go)** — required for Cloud Storage. On US billing account `01817C-24FBFE-66BA22`. Keep a budget + alerts (~$5/mo). |
+| Public URL | `https://identity-api.robles.ai` |
+
+**Cost expectation:** at rest ~$0/mo (Cloud Run scales to zero + free tier;
+Firestore/Storage within free quotas; Secret Manager minimal; Artifact Registry
+a few cents for the image). Real cost only under sustained traffic (capped by
+`--max-instances=2`). Blaze is pay-as-you-go, not free-forever — set a budget.
+
+**Enabled APIs (relevant):** `run`, `firestore`, `secretmanager`,
+`artifactregistry`, `cloudbuild`, `firebasestorage`, `storage`, `iam`,
+`firebase` (all `.googleapis.com`).
+
+**Cloud Run:** service `identity-server`, memory `4Gi`, `--max-instances=2`,
+`--allow-unauthenticated`, env `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS`, secret
+mount `/secrets/FIREBASE_KEY ← FIREBASE_KEY:1`, runs as
+`cloud-run-sa@identityverifierapp.iam.gserviceaccount.com`. Domain mapping
+`identity-api.robles.ai → identity-server` (DNS: CNAME `identity-api →
+ghs.googlehosted.com.`).
+
+**Service accounts:**
+| Email | Use |
+|-------|-----|
+| `cloud-run-sa@…` | Runtime SA; has `secretmanager.secretAccessor` + `run.invoker` |
+| `firebase-adminsdk-fbsvc@…` | Firebase Admin SDK SA — source of `firebase_key.json` |
+| `105527807738-compute@…` | Default compute SA |
+| `github-deployer@…` | CI/CD deployer (create per README → Deployment) |
+
+**Secret Manager:** only `FIREBASE_KEY` (Firebase SA JSON). Mounted `:1` on
+Cloud Run — do not use `latest` (caused ~$3.48/mo in access charges).
+
+**Firestore:** Native mode. Collections `request` (one doc per verification) and
+`cronLocks/taskLock`.
+
+**Firebase Storage:** bucket `identityverifierapp.firebasestorage.app`; prefixes
+`demo-uploads/` (frontend) + `images/` (processed). ⚠️ No lifecycle rule yet.
+
+**Artifact Registry (us-central1):** `my-repo` (identity-server image),
+`rag-api-repo` (other service), `cloud-run-source-deploy` (leftover).
+
+**TLS / domain:** `robles.ai` must stay **verified in Google Search Console**
+(TXT `google-site-verification=...` in DNS) AND the CNAME must resolve, or the
+managed certificate won't auto-renew. A lapsed verification once let the cert
+expire (`ERR_CERT_DATE_INVALID`) — keep both DNS records in place.
+
+## 13. Recreate from scratch (ordered runbook)
+
+Requires `gcloud` + Blaze billing linked + the Firebase Admin `firebase_key.json`.
+
+```bash
+PROJECT_ID=identityverifierapp
+REGION=us-central1
+
+# 1. Enable APIs
+gcloud services enable \
+  run.googleapis.com firestore.googleapis.com secretmanager.googleapis.com \
+  artifactregistry.googleapis.com cloudbuild.googleapis.com \
+  firebasestorage.googleapis.com storage.googleapis.com iam.googleapis.com \
+  --project=$PROJECT_ID
+
+# 2. Firestore (Native mode)
+gcloud firestore databases create --location=$REGION --project=$PROJECT_ID
+
+# 3. Firebase Storage bucket — via Firebase console (Storage → Get started),
+#    requires Blaze. Bucket: identityverifierapp.firebasestorage.app
+
+# 4. Firebase Admin key — Firebase console → Project settings → Service accounts
+#    → Generate new private key → save as firebase_key.json (gitignored)
+
+# 5. Artifact Registry repo, cloud-run-sa, secret, IAM, Cloud Run deploy and
+#    domain mapping are handled by:
+./deploy_fresh_gcp.sh
+
+# 6. DNS: CNAME identity-api → ghs.googlehosted.com.  (+ keep the Search Console
+#    TXT verification record). Cloud Run provisions the TLS cert automatically.
+
+# 7. CI/CD: create github-deployer SA + GCP_SA_KEY secret (README → Deployment)
+```
+
+Verify: `curl https://identity-api.robles.ai/` after DNS + cert.
+
+## 14. Maintenance (recommended)
+
+- **Artifact Registry cleanup** — CI/CD pushes one image per commit; add a
+  cleanup policy to keep only the N most recent:
+  `gcloud artifacts repositories set-cleanup-policies my-repo --location=us-central1 --policy=<policy.json>`
+- **Storage lifecycle** — expire old demo/processed images:
+  `gcloud storage buckets update gs://identityverifierapp.firebasestorage.app --lifecycle-file=lifecycle.json`
+- **Billing budget** — Console → Billing → Budgets & alerts → ~$5/mo, alerts at 50/90/100%.
+
 ## 11. Change log (high level)
 
 - **2026-09**: Removed emotions/py-feat; slimmed Dockerfile (no dlib), 3-layer
   caching + baked model; added anti-SSRF + optional API key + tightened CORS;
-  cron lock TTL; GitHub Actions CI/CD; docker-compose + docs (README, AGENTS,
-  DEPLOYMENT, INFRASTRUCTURE). Migrated GCP billing to a US account; pinned
-  FIREBASE_KEY secret to `:1`; capped `--max-instances=2`.
+  cron lock TTL; GitHub Actions CI/CD; docker-compose. Consolidated docs into
+  README + AGENTS. Migrated GCP billing to a US account; pinned FIREBASE_KEY
+  secret to `:1`; capped `--max-instances=2`; re-verified `robles.ai` domain and
+  reissued the expired TLS cert.

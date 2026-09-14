@@ -96,13 +96,71 @@ See `.env.example` for a copy-paste template.
 
 ## Deployment (CI/CD)
 
-Push to `main` → GitHub Actions builds with Cloud Build and deploys to Cloud Run
-automatically. See **[DEPLOYMENT.md](./DEPLOYMENT.md)** for the full setup,
-including the one-time `GCP_SA_KEY` secret and how build caching keeps code
-pushes fast.
+Every push to `main` triggers `.github/workflows/deploy.yml`, which builds the
+image with Cloud Build and deploys it to Cloud Run. No manual `gcloud` needed.
 
-Manual/bootstrap scripts still exist: `deploy_fresh_gcp.sh` (first-time
-provisioning) and `update_docker.sh` (manual redeploy).
+### One-time setup (required for the workflow to work)
+
+The workflow authenticates to GCP with a service-account key stored as the
+GitHub secret `GCP_SA_KEY`. Create it once:
+
+```bash
+# 1. Create a deployer service account
+gcloud iam service-accounts create github-deployer \
+  --project=identityverifierapp \
+  --display-name="GitHub Actions deployer"
+
+SA="github-deployer@identityverifierapp.iam.gserviceaccount.com"
+
+# 2. Grant the roles needed to build + deploy
+for ROLE in roles/run.admin roles/cloudbuild.builds.editor \
+            roles/artifactregistry.writer roles/iam.serviceAccountUser \
+            roles/storage.admin; do
+  gcloud projects add-iam-policy-binding identityverifierapp \
+    --member="serviceAccount:$SA" --role="$ROLE"
+done
+
+# 3. Create a key and add it to GitHub secrets as GCP_SA_KEY
+gcloud iam service-accounts keys create key.json --iam-account="$SA"
+gh secret set GCP_SA_KEY --repo jroblesluna/robles.ai-identity-api < key.json
+rm key.json   # do not keep the key on disk
+```
+
+> Security note: a long-lived SA key is the simplest option but not the most
+> secure. Consider migrating to Workload Identity Federation (keyless) later:
+> swap the `credentials_json` input for `workload_identity_provider`.
+
+### Build caching — code pushes don't reinstall deps or re-download the model
+
+The Dockerfile is layered so day-to-day code changes build fast:
+
+1. `COPY requirements.txt` + `pip install`  → dependency layer
+2. Pre-download InsightFace `buffalo_l`      → model layer
+3. `COPY . /app`                             → application layer
+
+Layers 1–2 are only rebuilt when `requirements.txt` changes. A code-only push
+reuses the cached dependency + model layers and only rebuilds the small app
+layer. The pretrained model is baked into the image at build time, so it is
+never re-downloaded on push and production cold-starts are fast. (Cloud Build
+reuses cache across builds via the `:latest` tag it also pushes. The first build
+— or any `requirements.txt` change — is slow; subsequent code pushes are quick.)
+
+### What the deploy preserves
+
+- Secret mounted at `/secrets/FIREBASE_KEY` pinned to version `:1` (avoids the
+  Secret Manager access cost from `latest`).
+- `--max-instances=2` to cap compute cost.
+- `STORAGE_BUCKET_NAME` and `ALLOWED_ORIGINS` env vars.
+
+To enable API-key auth in production, add an `API_KEY` value to the
+`--set-env-vars` list in the workflow (and send it from the frontend).
+
+### Legacy / bootstrap scripts
+
+`deploy_fresh_gcp.sh` (full first-time provisioning) and `update_docker.sh`
+(manual redeploy) still work for manual/bootstrap use, but day-to-day deploys
+go through GitHub Actions. See **[AGENTS.md](./AGENTS.md)** for the full GCP
+resource inventory and a recreate-from-scratch runbook.
 
 ---
 
@@ -127,6 +185,5 @@ docker-compose.yml            # local run matching Cloud Run
 .github/workflows/deploy.yml  # CI/CD
 ```
 
-For deeper architecture, data flow, conventions and known issues, see
-**[AGENTS.md](./AGENTS.md)**. For the full GCP resource inventory and a
-recreate-from-scratch runbook, see **[INFRASTRUCTURE.md](./INFRASTRUCTURE.md)**.
+For deeper architecture, data flow, conventions, the full GCP resource
+inventory and a recreate-from-scratch runbook, see **[AGENTS.md](./AGENTS.md)**.
