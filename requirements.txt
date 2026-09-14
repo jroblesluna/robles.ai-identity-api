@@ -1,14 +1,24 @@
 setuptools
+
+# Web framework
 fastapi==0.110.1
-google-cloud-firestore==2.20.2
-opencv-python==4.11.0.86
-pillow==11.2.1
 uvicorn==0.29.0
 python-dotenv==1.0.1
-firebase-admin
 httpx
-tzlocal==5.3.1
+
+# Google / Firebase
+google-cloud-firestore==2.20.2
+firebase-admin
+
+# Image processing + face recognition (CPU inference)
+opencv-python==4.11.0.86
+pillow==11.2.1
 insightface==0.7.3
 onnxruntime
-py-feat
 scipy==1.11.4
+tzlocal==5.3.1
+
+# NOTE: py-feat (emotion detection) was removed. It pulled in torch + the full
+# NVIDIA CUDA stack (~4 GB) that this CPU-only service never used, bloating the
+# image and slowing builds. The emotions code lives in _archived/emotions/ and
+# can be re-enabled in a separate service if needed.

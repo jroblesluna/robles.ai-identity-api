@@ -1,13 +1,16 @@
 from datetime import datetime, timezone
 import traceback
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app.database.config import conect_to_firestoreDataBase
 from fastapi.responses import JSONResponse
 from app.utils.response import create_success_response
+from app.utils.security import require_api_key
 
 
-router = APIRouter()
+# require_api_key is a no-op unless the API_KEY env var is set, so this does
+# not break the frontend until a key is configured.
+router = APIRouter(dependencies=[Depends(require_api_key)])
 db = conect_to_firestoreDataBase()
 
 

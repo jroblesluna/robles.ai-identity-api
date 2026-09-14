@@ -1,15 +1,16 @@
 import tempfile
 import cv2
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.services.database_service import upload_image_cv2
 from app.services.emotions_service import get_emotions_from_image, get_emotions_from_video
 from app.services.recognition_service import read_image_from_url
 from app.utils.response import create_error_response, create_success_response
+from app.utils.security import require_api_key
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 # una imagen de una persona , 

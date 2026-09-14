@@ -7,3 +7,18 @@ __pycache__/
 .venv/
 .env
 firebase_key.json
+.git
+.github
+docker-compose.yml
+DEPLOYMENT.md
+.env.example
+node_modules
+
+# Not used by the image anymore
+_archived/
+dlib-precompiled/
+*.md
+*.sh
+cloudbuild.yaml
+package.json
+package-lock.json

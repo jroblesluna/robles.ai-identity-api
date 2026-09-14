@@ -1,0 +1,20 @@
+# Local development: build and run the API exactly like Cloud Run does.
+#
+#   docker compose up --build
+#
+# Requires a local firebase_key.json (gitignored) in the project root.
+# The server will be available at http://localhost:8080
+services:
+  identity-server:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      # Mount the local key at the same path Cloud Run uses, so config.py
+      # picks it up without code changes.
+      - ./firebase_key.json:/secrets/FIREBASE_KEY:ro
+    environment:
+      # Ensure the app reads the mounted secret path in local runs too.
+      - FIREBASE_KEY_PATH=/secrets/FIREBASE_KEY

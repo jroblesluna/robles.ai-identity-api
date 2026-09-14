@@ -11,6 +11,7 @@ import traceback
 from app.services.database_service import upload_image_cv2
 from app.utils.others import convert_numpy_types
 from app.utils.response import create_error_response, create_success_response
+from app.utils.security import IMAGE_FETCH_TIMEOUT, validate_image_url
 from insightface.app import FaceAnalysis
 import warnings
 
@@ -271,8 +272,15 @@ def read_image_from_url(url: str):
     Returns:
     - Image as np. ndarray.
     """
+    # Validate the URL before fetching (anti-SSRF): allowed hosts only, no
+    # internal/private IPs. Prevents the server from being tricked into
+    # requesting cloud metadata endpoints or internal services.
+    is_valid, err = validate_image_url(url)
+    if not is_valid:
+        return create_error_response(code=400, message=f"Invalid image URL - {err}")
+
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=IMAGE_FETCH_TIMEOUT)
         response.raise_for_status()  # Throws error if the response is not 200
 
         # Convert bytes to an OpenCV image
