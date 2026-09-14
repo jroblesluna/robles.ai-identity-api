@@ -138,9 +138,14 @@ cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
 - **dlib / face_recognition are dead code.** The service migrated to InsightFace;
   all `face_recognition` usage is commented out. The Dockerfile no longer compiles
   dlib. `dlib-precompiled/` stays in the repo but is `.dockerignore`d.
-- **Emotions was removed.** It used `py-feat` → pulled `torch` + full CUDA (~4 GB)
-  into a CPU-only image. Code is in `_archived/emotions/`. If reviving, deploy it
-  as a **separate** service, don't add it back here.
+- **Emotions was removed** (2026-09-13). Endpoints `/emotions/get-image-emotions`
+  and `/emotions/get-video-emotions` used `py-feat`, which pulled `torch` + the
+  full NVIDIA CUDA stack (~4 GB) into this CPU-only image — bloating it and
+  slowing builds. The code is kept in `_archived/emotions/` (`emotions.py`,
+  `emotions_service.py`). It depends on `app.services.database_service`,
+  `recognition_service.read_image_from_url` and `app.utils.*`. If revived, deploy
+  it as a **separate** Cloud Run service with its own repo/requirements — do NOT
+  add it back here.
 - `output` field `distance` = similarity, not distance (naming is misleading).
 - `conect_to_firestoreDataBase` has a typo in its name — kept for compatibility;
   don't rename without updating all call sites.
