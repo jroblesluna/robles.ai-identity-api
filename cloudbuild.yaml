@@ -1,0 +1,13 @@
+# Build with Kaniko layer caching. Unlike `docker build --cache-from` (which must
+# pull the whole previous image first — slow for this large InsightFace image),
+# Kaniko stores/reuses individual layer caches in Artifact Registry WITHOUT
+# downloading the full image. A code-only change then reuses the heavy cached
+# layers (pip install of insightface + the baked buffalo_l model) and only
+# rebuilds the final `COPY . /app` layer, turning ~4-5 min builds into ~1 min.
+steps:
+  - name: 'gcr.io/kaniko-project/executor:latest'
+    args:
+      - '--destination=us-central1-docker.pkg.dev/$PROJECT_ID/my-repo/identity-server:latest'
+      - '--cache=true'
+      - '--cache-ttl=336h'          # reuse cached layers for up to 14 days
+      - '--cache-repo=us-central1-docker.pkg.dev/$PROJECT_ID/my-repo/identity-server-cache'

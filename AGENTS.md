@@ -130,15 +130,24 @@ cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
   Requires the `GCP_SA_KEY` GitHub secret (setup steps in README → Deployment).
 - Deploy flags fixed by the workflow: `--memory=4Gi`, `--max-instances=2`,
   `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS` env, secret `FIREBASE_KEY:1`.
-- Manual scripts (non-interactive, same convention as the sibling `rag-api` /
-  `langchain-api` repos): `deploy_fresh_gcp.sh` (full provisioning),
-  `update_docker.sh` (rotates the `FIREBASE_KEY` secret from `firebase_key.json`,
-  then rebuild + redeploy), `delete_all_gcp_resources.sh` (teardown). All pass
-  `--project` explicitly. Unlike rag/langchain, this repo builds with
-  `gcloud builds submit --tag` (no `cloudbuild.yaml`): the image is large
-  (InsightFace + baked `buffalo_l` model), so pulling it for `--cache-from`
-  caching is slower than a direct rebuild. Day-to-day can also use the GitHub
-  Actions workflow.
+- Manual scripts — identical set/names across the three API repos
+  (`robles.ai-identity-api`, `robles.ai-rag-api`, `robles.ai-langchain-api`),
+  each individualized to its project. All non-interactive and pass `--project`
+  explicitly:
+  - `deploy_fresh_gcp.sh` — full first-time provisioning (APIs, secrets, Artifact
+    Registry, service account + IAM, build, deploy, domain mapping).
+  - `update_docker.sh` — code changes: rotate the `FIREBASE_KEY` secret from
+    `firebase_key.json`, rebuild the image (Kaniko cache), redeploy.
+  - `rotate_secret.sh` — **secret-only** rotation: push a new `FIREBASE_KEY`
+    version and roll Cloud Run onto it **without rebuilding** (seconds, not
+    minutes). Use this when only the credential changed.
+  - `delete_all_gcp_resources.sh` — teardown.
+
+  Builds go through `cloudbuild.yaml` using **Kaniko** layer caching: it caches
+  individual layers in Artifact Registry (`*-cache` repo) WITHOUT pulling the
+  whole large image, so a code-only change reuses the heavy layers (insightface
+  install + baked `buffalo_l` model) and only rebuilds the final `COPY` layer
+  (~1 min vs ~4-5). Day-to-day can also use the GitHub Actions workflow.
 
 ## 9. Conventions & gotchas
 

@@ -155,12 +155,21 @@ reuses cache across builds via the `:latest` tag it also pushes. The first build
 To enable API-key auth in production, add an `API_KEY` value to the
 `--set-env-vars` list in the workflow (and send it from the frontend).
 
-### Legacy / bootstrap scripts
+### Deploy scripts
 
-`deploy_fresh_gcp.sh` (full first-time provisioning) and `update_docker.sh`
-(manual redeploy) still work for manual/bootstrap use, but day-to-day deploys
-go through GitHub Actions. See **[AGENTS.md](./AGENTS.md)** for the full GCP
-resource inventory and a recreate-from-scratch runbook.
+The three API repos (`robles.ai-identity-api`, `robles.ai-rag-api`,
+`robles.ai-langchain-api`) share the same four scripts, each individualized:
+
+| Script | Purpose |
+|--------|---------|
+| `deploy_fresh_gcp.sh` | Full first-time provisioning (APIs, secrets, repo, SA, deploy, domain) |
+| `update_docker.sh` | Code change: rotate secret + rebuild (Kaniko cache) + redeploy |
+| `rotate_secret.sh` | Secret-only rotation + reload on Cloud Run, **no rebuild** (seconds) |
+| `delete_all_gcp_resources.sh` | Tear down all GCP resources |
+
+Day-to-day deploys can also go through GitHub Actions. See
+**[AGENTS.md](./AGENTS.md)** for the full GCP resource inventory and a
+recreate-from-scratch runbook.
 
 ---
 

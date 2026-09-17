@@ -48,7 +48,7 @@ fi
 
 # ──────── CONSTRUIR IMAGEN DOCKER ────────
 echo "🔧 Construyendo imagen Docker y subiendo a Artifact Registry..."
-gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$TAG" --project="$PROJECT_ID" .
+gcloud builds submit --config cloudbuild.yaml --project="$PROJECT_ID" .
 
 # ──────── CUENTA DE SERVICIO ────────
 echo "👤 Verificando cuenta de servicio '$CLOUD_RUN_SA_EMAIL'..."

@@ -40,11 +40,12 @@ else
 fi
 
 # ────────── CONSTRUIR IMAGEN DOCKER ──────────
-echo "🔧 Construyendo imagen Docker y subiendo a Artifact Registry..."
-# NOTE: identity's image (InsightFace + models) is large; pulling the previous
-# image for --cache-from caching is slower than just rebuilding, so we build
-# directly with --tag (unlike rag/langchain, whose caching pays off).
-gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$TAG" --project="$PROJECT_ID" .
+echo "🔧 Construyendo imagen Docker (Kaniko cache) y subiendo a Artifact Registry..."
+# Uses cloudbuild.yaml with Kaniko layer caching: a code-only change reuses the
+# heavy cached layers (insightface install + baked buffalo_l model) and only
+# rebuilds the final COPY layer (~1 min instead of ~4-5). Kaniko caches layers
+# in the registry without pulling the whole (large) image first.
+gcloud builds submit --config cloudbuild.yaml --project="$PROJECT_ID" .
 
 # ────────── DESPLIEGUE EN CLOUD RUN ──────────
 echo "🚀 Desplegando nueva versión del servicio..."
