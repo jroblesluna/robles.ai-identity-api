@@ -46,7 +46,7 @@ holds a similarity: higher = more alike.)
 | `GET`  | `/recognition/get/{id}` | Fetch a request by ID (used for polling) |
 | `POST` | `/cron/verify-id` | Process pending requests (idempotent; uses a Firestore lock) |
 
-> The `/emotions/*` endpoints were removed — see `_archived/emotions/`.
+> The `/emotions/*` endpoints were removed.
 
 ---
 
@@ -179,7 +179,6 @@ app/
     security.py               # anti-SSRF URL validation + optional API key
     response.py               # success/error response envelopes
     others.py                 # numpy→native type conversion
-_archived/emotions/           # removed emotions module (see its README)
 Dockerfile                    # 3 cached layers: deps → model → app code
 docker-compose.yml            # local run matching Cloud Run
 .github/workflows/deploy.yml  # CI/CD

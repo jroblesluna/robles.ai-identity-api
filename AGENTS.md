@@ -130,22 +130,28 @@ cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
   Requires the `GCP_SA_KEY` GitHub secret (setup steps in README → Deployment).
 - Deploy flags fixed by the workflow: `--memory=4Gi`, `--max-instances=2`,
   `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS` env, secret `FIREBASE_KEY:1`.
-- Legacy scripts: `deploy_fresh_gcp.sh` (full provisioning), `update_docker.sh`
-  (manual redeploy). Kept for bootstrap; day-to-day uses the workflow.
+- Manual scripts (non-interactive, same convention as the sibling `rag-api` /
+  `langchain-api` repos): `deploy_fresh_gcp.sh` (full provisioning),
+  `update_docker.sh` (rotates the `FIREBASE_KEY` secret from `firebase_key.json`,
+  then rebuild + redeploy), `delete_all_gcp_resources.sh` (teardown). All pass
+  `--project` explicitly. Unlike rag/langchain, this repo builds with
+  `gcloud builds submit --tag` (no `cloudbuild.yaml`): the image is large
+  (InsightFace + baked `buffalo_l` model), so pulling it for `--cache-from`
+  caching is slower than a direct rebuild. Day-to-day can also use the GitHub
+  Actions workflow.
 
 ## 9. Conventions & gotchas
 
 - **dlib / face_recognition are dead code.** The service migrated to InsightFace;
-  all `face_recognition` usage is commented out. The Dockerfile no longer compiles
-  dlib. `dlib-precompiled/` stays in the repo but is `.dockerignore`d.
+  all `face_recognition` usage is commented out. The old `dlib-precompiled/` dir
+  was removed from the repo (2026-09). Note: `insightface` compiles a native
+  wheel, so the Dockerfile installs `build-essential` + `g++`.
 - **Emotions was removed** (2026-09-13). Endpoints `/emotions/get-image-emotions`
   and `/emotions/get-video-emotions` used `py-feat`, which pulled `torch` + the
   full NVIDIA CUDA stack (~4 GB) into this CPU-only image — bloating it and
-  slowing builds. The code is kept in `_archived/emotions/` (`emotions.py`,
-  `emotions_service.py`). It depends on `app.services.database_service`,
-  `recognition_service.read_image_from_url` and `app.utils.*`. If revived, deploy
-  it as a **separate** Cloud Run service with its own repo/requirements — do NOT
-  add it back here.
+  slowing builds. That code (`_archived/emotions/`) was removed from the repo
+  (2026-09). If revived, deploy it as a **separate** Cloud Run service with its
+  own repo/requirements — do NOT add it back here.
 - `output` field `distance` = similarity, not distance (naming is misleading).
 - `conect_to_firestoreDataBase` has a typo in its name — kept for compatibility;
   don't rename without updating all call sites.
