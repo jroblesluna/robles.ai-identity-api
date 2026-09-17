@@ -48,9 +48,7 @@ fi
 
 # ──────── CONSTRUIR IMAGEN DOCKER ────────
 echo "🔧 Construyendo imagen Docker y subiendo a Artifact Registry..."
-gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$TAG"
-#gcloud builds list --limit=5
-#gcloud builds log [BUILD_ID] --stream
+gcloud builds submit --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$TAG" --project="$PROJECT_ID" .
 
 # ──────── CUENTA DE SERVICIO ────────
 echo "👤 Verificando cuenta de servicio '$CLOUD_RUN_SA_EMAIL'..."
@@ -93,6 +91,7 @@ node updateLocked.js
 # ──────── DESPLIEGUE EN CLOUD RUN ────────
 echo "🚀 Desplegando servicio en Cloud Run..."
 gcloud run deploy "$SERVICE_NAME" \
+  --project="$PROJECT_ID" \
   --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$TAG" \
   --region="$REGION" \
   --platform=managed \

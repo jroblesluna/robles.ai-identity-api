@@ -1,9 +1,12 @@
 FROM python:3.10-slim
 
-# Minimal runtime libraries needed by OpenCV (headless) and general TLS.
-# dlib/face_recognition are no longer used (migrated to InsightFace), so the
-# heavy build toolchain (build-essential, cmake, boost, ...) was removed.
+# Runtime libraries needed by OpenCV (headless) + general TLS, plus a C++
+# toolchain (build-essential/g++) required to build the insightface wheel from
+# source during pip install. dlib/face_recognition were removed (migrated to
+# InsightFace), but insightface itself still compiles a native extension.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    g++ \
     libglib2.0-0 \
     libgl1 \
     libgomp1 \
