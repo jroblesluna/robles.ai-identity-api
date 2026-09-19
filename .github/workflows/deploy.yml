@@ -1,11 +1,17 @@
 name: Deploy to Cloud Run
 
-# CI/CD: on every push to main, build the image with Cloud Build and deploy
-# it to Cloud Run. Mirrors update_docker.sh but runs automatically.
+# CI/CD: on every push to main, build the image with Cloud Build and deploy it
+# to Cloud Run. Mirrors update_docker.sh but runs automatically. First-time GCP
+# resource creation is done manually with deploy_fresh_gcp.sh (which also creates
+# the github-deployer SA used here).
+#
+# NOTE: unlike rag/langchain, identity builds with a direct --tag (no Kaniko
+# cloudbuild.yaml): its image (InsightFace + baked buffalo_l model) is large and
+# pulling it for cache caching is slower than a direct rebuild.
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}   # allow manual runs from the Actions tab
+  workflow_dispatch: {}
 
 env:
   PROJECT_ID: identityverifierapp
@@ -13,6 +19,7 @@ env:
   REPO_NAME: my-repo
   SERVICE_NAME: identity-server
   IMAGE_NAME: identity-server
+  RUNTIME_SA: cloud-run-sa@identityverifierapp.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -21,8 +28,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Authenticate to Google Cloud using a service account key stored in the
-      # GCP_SA_KEY GitHub secret (JSON). See setup notes in the PR/README.
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -50,8 +55,9 @@ jobs:
             --allow-unauthenticated \
             --memory=4Gi \
             --max-instances=2 \
+            --service-account="$RUNTIME_SA" \
             --set-env-vars="STORAGE_BUCKET_NAME=identityverifierapp.firebasestorage.app,ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai" \
-            --set-secrets="/secrets/FIREBASE_KEY=FIREBASE_KEY:1"
+            --set-secrets="/secrets/FIREBASE_KEY=FIREBASE_KEY:latest"
 
       - name: Show service URL
         run: |

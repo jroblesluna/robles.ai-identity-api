@@ -101,30 +101,24 @@ image with Cloud Build and deploys it to Cloud Run. No manual `gcloud` needed.
 
 ### One-time setup (required for the workflow to work)
 
-The workflow authenticates to GCP with a service-account key stored as the
-GitHub secret `GCP_SA_KEY`. Create it once:
+`deploy_fresh_gcp.sh` provisions the GCP resources once **and creates the
+`github-deployer` service account** (with the roles needed to build + deploy).
+After running it, all that's left is to give GitHub the key:
 
 ```bash
-# 1. Create a deployer service account
-gcloud iam service-accounts create github-deployer \
-  --project=identityverifierapp \
-  --display-name="GitHub Actions deployer"
-
-SA="github-deployer@identityverifierapp.iam.gserviceaccount.com"
-
-# 2. Grant the roles needed to build + deploy
-for ROLE in roles/run.admin roles/cloudbuild.builds.editor \
-            roles/artifactregistry.writer roles/iam.serviceAccountUser \
-            roles/storage.admin; do
-  gcloud projects add-iam-policy-binding identityverifierapp \
-    --member="serviceAccount:$SA" --role="$ROLE"
-done
-
-# 3. Create a key and add it to GitHub secrets as GCP_SA_KEY
-gcloud iam service-accounts keys create key.json --iam-account="$SA"
+# github-deployer already exists (created by deploy_fresh_gcp.sh).
+# 1. Create a JSON key for it:
+gcloud iam service-accounts keys create key.json \
+  --iam-account=github-deployer@identityverifierapp.iam.gserviceaccount.com \
+  --project=identityverifierapp
+# 2. Store it as the repo secret the workflow uses, then delete the file:
 gh secret set GCP_SA_KEY --repo jroblesluna/robles.ai-identity-api < key.json
 rm key.json   # do not keep the key on disk
 ```
+
+The workflow then deploys on push (and can be triggered manually from the Actions
+tab via `workflow_dispatch`). Manual fallback: `update_docker.sh` /
+`rotate_secret.sh`.
 
 > Security note: a long-lived SA key is the simplest option but not the most
 > secure. Consider migrating to Workload Identity Federation (keyless) later:

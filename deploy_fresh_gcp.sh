@@ -84,6 +84,33 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --role="roles/run.invoker" \
   --quiet || true
 
+# ──────── SERVICE ACCOUNT DE CI/CD (GitHub Actions) ────────
+# Este script crea los recursos GCP UNA VEZ. Luego los despliegues son por CI/CD
+# (push a main → .github/workflows/deploy.yml). SA de CI/CD con permisos mínimos.
+CI_SA="github-deployer"
+CI_SA_EMAIL="$CI_SA@$PROJECT_ID.iam.gserviceaccount.com"
+echo "👤 Verificando cuenta de servicio de CI/CD '$CI_SA_EMAIL'..."
+if ! gcloud iam service-accounts describe "$CI_SA_EMAIL" --project="$PROJECT_ID" > /dev/null 2>&1; then
+  gcloud iam service-accounts create "$CI_SA" --project="$PROJECT_ID" \
+    --display-name="GitHub Actions deployer"
+fi
+for ROLE in roles/run.admin roles/cloudbuild.builds.editor roles/artifactregistry.writer roles/secretmanager.secretAccessor; do
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$CI_SA_EMAIL" --role="$ROLE" --quiet || true
+done
+gcloud iam service-accounts add-iam-policy-binding "$CLOUD_RUN_SA_EMAIL" \
+  --project="$PROJECT_ID" \
+  --member="serviceAccount:$CI_SA_EMAIL" \
+  --role="roles/iam.serviceAccountUser" --quiet || true
+
+echo ""
+echo "🔑 SIGUIENTE PASO MANUAL (una sola vez) para activar el CI/CD:"
+echo "   1) gcloud iam service-accounts keys create gcp-sa-key.json \\"
+echo "        --iam-account=$CI_SA_EMAIL --project=$PROJECT_ID"
+echo "   2) gh secret set GCP_SA_KEY --repo jroblesluna/robles.ai-identity-api < gcp-sa-key.json && rm gcp-sa-key.json"
+echo "   Tras esto, cada push a main desplegará automáticamente vía Actions."
+echo ""
+
 # ───── VERIFICA STATUS LOCKED FALSE ─────
 npm install firebase-admin
 node updateLocked.js
