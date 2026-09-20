@@ -6,9 +6,10 @@ uvicorn==0.29.0
 python-dotenv==1.0.1
 httpx
 
-# Google / Firebase
-google-cloud-firestore==2.20.2
-firebase-admin
+# NOTE: Firebase (Firestore + Storage) was removed. The async request queue now
+# lives in-process (app/services/store.py, --max-instances=1) and images are
+# exchanged as base64 — no external datastore. Dropped google-cloud-firestore
+# and firebase-admin (and their transitive gRPC/google-cloud deps).
 
 # Image processing + face recognition (CPU inference)
 opencv-python==4.11.0.86

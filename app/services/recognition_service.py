@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 import numpy as np
 import requests
 import traceback
-from app.services.database_service import upload_image_cv2
+import base64
 from app.utils.others import convert_numpy_types
 from app.utils.response import create_error_response, create_success_response
 from app.utils.security import IMAGE_FETCH_TIMEOUT, validate_image_url
@@ -608,3 +608,55 @@ def compare_verify_faces(image1: np.ndarray, image2: np.ndarray):
             message=f"Error processing images: {str(e)}",
             data=data_response_compare,
         )
+
+
+# ── base64 image helpers (replace Firebase Storage) ─────────────────────────
+# Input images arrive as base64 in the request body; output (processed) images
+# are returned inline as base64 data-URIs. Nothing is persisted to any bucket.
+
+def decode_base64_to_cv2(data: str):
+    """Decode a base64 image (optionally a data-URI) into a BGR OpenCV image.
+
+    Returns a create_success_response with the np.ndarray in `data`, or a
+    create_error_response on failure — mirrors read_image_from_url's contract so
+    the cron code path is unchanged.
+    """
+    try:
+        if not data or not isinstance(data, str):
+            return create_error_response(code=400, message="Empty or invalid base64 image")
+        # Strip a data-URI prefix if present ("data:image/jpeg;base64,....").
+        if "," in data and data.strip().lower().startswith("data:"):
+            data = data.split(",", 1)[1]
+        raw = base64.b64decode(data, validate=False)
+        image_array = np.frombuffer(raw, dtype=np.uint8)
+        image = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        if image is None:
+            return create_error_response(code=400, message="The image could not be decoded.")
+        return create_success_response(
+            data=image, message="Image decoded successfully", code=200
+        )
+    except Exception as e:
+        return create_error_response(code=400, message=f"Invalid base64 image - {str(e)}")
+
+
+def encode_cv2_to_base64(image, max_size: int = 400, quality: int = 80) -> str | None:
+    """Encode a BGR OpenCV image to a JPEG base64 data-URI (thumbnail-sized).
+
+    Downscales to `max_size` on the longest side to keep payloads small — these
+    are shown in a small results grid, so full resolution is unnecessary.
+    Returns None if the input is not a valid image array.
+    """
+    try:
+        if image is None or not isinstance(image, np.ndarray):
+            return None
+        h, w = image.shape[:2]
+        if max(h, w) > max_size:
+            scale = max_size / max(h, w)
+            image = cv2.resize(image, (int(w * scale), int(h * scale)))
+        ok, buf = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not ok:
+            return None
+        b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        return None

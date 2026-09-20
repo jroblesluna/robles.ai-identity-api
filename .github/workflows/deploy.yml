@@ -1,25 +1,22 @@
 name: Deploy to Cloud Run
 
-# CI/CD: on every push to main, build the image with Cloud Build and deploy it
-# to Cloud Run. Mirrors update_docker.sh but runs automatically. First-time GCP
-# resource creation is done manually with deploy_fresh_gcp.sh (which also creates
-# the github-deployer SA used here).
-#
-# NOTE: unlike rag/langchain, identity builds with a direct --tag (no Kaniko
-# cloudbuild.yaml): its image (InsightFace + baked buffalo_l model) is large and
-# pulling it for cache caching is slower than a direct rebuild.
+# CI/CD: on every push to main, build the image with Cloud Build (Kaniko layer
+# caching via cloudbuild.yaml) and deploy it to Cloud Run. Mirrors update_docker.sh
+# but runs automatically. First-time GCP resource creation is done manually with
+# deploy_fresh_gcp.sh (which also creates the github-deployer SA used here).
+# Homogeneous with rag/langchain: same Kaniko cloudbuild.yaml build path.
 on:
   push:
     branches: [main]
   workflow_dispatch: {}
 
 env:
-  PROJECT_ID: identityverifierapp
+  PROJECT_ID: robles-ai-identity-project
   REGION: us-central1
   REPO_NAME: my-repo
   SERVICE_NAME: identity-server
   IMAGE_NAME: identity-server
-  RUNTIME_SA: cloud-run-sa@identityverifierapp.iam.gserviceaccount.com
+  RUNTIME_SA: cloud-run-sa@robles-ai-identity-project.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -38,26 +35,24 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Build image with Cloud Build
+      - name: Build image with Cloud Build (Kaniko cache)
         run: |
           gcloud builds submit \
             --project="$PROJECT_ID" \
-            --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$GITHUB_SHA" \
-            --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:latest"
+            --config cloudbuild.yaml .
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$SERVICE_NAME" \
             --project="$PROJECT_ID" \
-            --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$GITHUB_SHA" \
+            --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:latest" \
             --region="$REGION" \
             --platform=managed \
             --allow-unauthenticated \
             --memory=4Gi \
-            --max-instances=2 \
+            --max-instances=1 \
             --service-account="$RUNTIME_SA" \
-            --set-env-vars="STORAGE_BUCKET_NAME=identityverifierapp.firebasestorage.app,ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai" \
-            --set-secrets="/secrets/FIREBASE_KEY=FIREBASE_KEY:latest"
+            --set-env-vars="^|^ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai"
 
       - name: Show service URL
         run: |

@@ -6,26 +6,37 @@ a similarity score. Powers the live demo at https://robles.ai/try-identity.
 
 - **Framework:** FastAPI (Python 3.10)
 - **Face model:** InsightFace `buffalo_l` (pretrained, CPU inference)
-- **Datastore:** Firestore (request records)
-- **Storage:** Firebase Storage (processed result images)
+- **Datastore:** none — the async request queue lives **in-process** (memory)
+- **Storage:** none — images are exchanged as **base64** (nothing persisted)
 - **Hosting:** Google Cloud Run — `https://identity-api.robles.ai`
-- **Project (GCP):** `identityverifierapp` · region `us-central1`
+- **Project (GCP):** `robles-ai-identity-project` · region `us-central1`
+
+> **No Firebase.** This service used to depend on Firestore (as a request queue)
+> and Firebase Storage (for processed images). Both were removed: the queue is
+> now a process-local store (`app/services/store.py`) and images travel as
+> base64 in the request/response. The service runs with `--max-instances=1` so
+> the single instance owns the whole async flow. No biometric data is persisted
+> anywhere — it lives only for the lifetime of the request.
 
 ---
 
 ## How it works
 
 Verification is **asynchronous**: a request is created, then a separate cron
-step processes it, then the client polls for the result.
+step processes it, then the client polls for the result. (The async flow is kept
+for demo UX — a visible "queue → processing → done" progression — even though it
+now runs entirely in memory.)
 
 ```
-1. POST /recognition/verify-id   → creates a Firestore "request" (status: pending)
+1. POST /recognition/verify-id   → creates an in-memory request (status: pending)
+                                    body carries the two images as base64
 2. POST /cron/verify-id          → processes pending requests:
-     - downloads faceImageUrl + cardIdImageUrl
+     - decodes the base64 selfie + ID images
      - runs InsightFace, compares embeddings (cosine similarity)
-     - uploads processed images to Firebase Storage
-     - POSTs the result to the request's callback URL
+     - encodes the processed images back to base64 (data-URIs)
+     - POSTs the result to the request's callback URL (if provided)
 3. GET  /recognition/get/{id}    → client polls this until status is terminal
+                                    (base64 input images are redacted here)
 ```
 
 Request status lifecycle: `pending → started → partially_completed →
@@ -42,22 +53,22 @@ holds a similarity: higher = more alike.)
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/` | Health check |
-| `POST` | `/recognition/verify-id` | Create a verification request. Body: `{ faceImageUrl, cardIdImageUrl, callback }` |
+| `POST` | `/recognition/verify-id` | Create a verification request. Body: `{ faceImageBase64, cardIdImageBase64, callback }` |
 | `GET`  | `/recognition/get/{id}` | Fetch a request by ID (used for polling) |
-| `POST` | `/cron/verify-id` | Process pending requests (idempotent; uses a Firestore lock) |
+| `POST` | `/cron/verify-id` | Process pending requests (idempotent; uses an in-process asyncio lock) |
 
 > The `/emotions/*` endpoints were removed.
+> Legacy `faceImageUrl` / `cardIdImageUrl` body keys are still accepted for
+> backward compatibility, but the demo now sends base64.
 
 ---
 
 ## Local development
 
-Requires a `firebase_key.json` (service-account key) in the project root — it is
-gitignored and never committed.
+No credentials required — there is no Firebase key or bucket to configure.
 
 ```bash
 cp .env.example .env          # defaults are fine to start
-# put firebase_key.json in the project root
 
 # Option A — Docker (matches Cloud Run):
 docker compose up --build     # → http://localhost:8080
@@ -81,14 +92,11 @@ curl http://localhost:8080/          # {"message": "Hello, from Identity Identif
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `STORAGE_BUCKET_NAME` | — (required) | Firebase Storage bucket for processed images |
-| `FIREBASE_KEY_PATH` | `firebase_key.json` | Local path to the SA key (ignored on Cloud Run, which mounts `/secrets/FIREBASE_KEY`) |
 | `ENV` | `local` | Set to `production` to skip `.env` loading |
 | `ALLOWED_ORIGINS` | robles.ai + localhost | Extra CORS origins (comma-separated) |
 | `API_KEY` | _(empty)_ | If set, all requests must send `X-API-Key`. Empty = auth disabled |
-| `ALLOWED_IMAGE_HOSTS` | firebase/GCS hosts | Extra hosts allowed for server-side image fetch (anti-SSRF) |
-| `IMAGE_FETCH_TIMEOUT` | `15` | Timeout (s) for downloading images |
-| `CRON_LOCK_STALE_SECONDS` | `600` | Age after which a stuck cron lock is reclaimed |
+| `ALLOWED_IMAGE_HOSTS` | firebase/GCS hosts | Extra hosts allowed for server-side image fetch (anti-SSRF; only used by the legacy URL fetch helper) |
+| `IMAGE_FETCH_TIMEOUT` | `15` | Timeout (s) for downloading images (legacy URL fetch only) |
 
 See `.env.example` for a copy-paste template.
 
@@ -101,50 +109,35 @@ image with Cloud Build and deploys it to Cloud Run. No manual `gcloud` needed.
 
 ### One-time setup (required for the workflow to work)
 
-`deploy_fresh_gcp.sh` provisions the GCP resources once **and creates the
-`github-deployer` service account** (with the roles needed to build + deploy).
-After running it, all that's left is to give GitHub the key:
+`deploy_fresh_gcp.sh` provisions the GCP resources once — it **creates the GCP
+project if it doesn't exist**, links billing, enables APIs, builds + deploys, and
+**creates the `github-deployer` service account** (with the roles needed to
+build + deploy). After running it, all that's left is to give GitHub the key:
 
 ```bash
 # github-deployer already exists (created by deploy_fresh_gcp.sh).
 # 1. Create a JSON key for it:
 gcloud iam service-accounts keys create key.json \
-  --iam-account=github-deployer@identityverifierapp.iam.gserviceaccount.com \
-  --project=identityverifierapp
+  --iam-account=github-deployer@robles-ai-identity-project.iam.gserviceaccount.com \
+  --project=robles-ai-identity-project
 # 2. Store it as the repo secret the workflow uses, then delete the file:
 gh secret set GCP_SA_KEY --repo jroblesluna/robles.ai-identity-api < key.json
-rm key.json   # do not keep the key on disk
+rm key.json   # do not keep the key on disk (it is gitignored as a safety net)
 ```
 
 The workflow then deploys on push (and can be triggered manually from the Actions
-tab via `workflow_dispatch`). Manual fallback: `update_docker.sh` /
-`rotate_secret.sh`.
+tab via `workflow_dispatch`). Manual fallback: `update_docker.sh`.
 
 > Security note: a long-lived SA key is the simplest option but not the most
 > secure. Consider migrating to Workload Identity Federation (keyless) later:
 > swap the `credentials_json` input for `workload_identity_provider`.
 
-### Build caching — code pushes don't reinstall deps or re-download the model
+### What the deploy sets
 
-The Dockerfile is layered so day-to-day code changes build fast:
-
-1. `COPY requirements.txt` + `pip install`  → dependency layer
-2. Pre-download InsightFace `buffalo_l`      → model layer
-3. `COPY . /app`                             → application layer
-
-Layers 1–2 are only rebuilt when `requirements.txt` changes. A code-only push
-reuses the cached dependency + model layers and only rebuilds the small app
-layer. The pretrained model is baked into the image at build time, so it is
-never re-downloaded on push and production cold-starts are fast. (Cloud Build
-reuses cache across builds via the `:latest` tag it also pushes. The first build
-— or any `requirements.txt` change — is slow; subsequent code pushes are quick.)
-
-### What the deploy preserves
-
-- Secret mounted at `/secrets/FIREBASE_KEY` pinned to version `:1` (avoids the
-  Secret Manager access cost from `latest`).
-- `--max-instances=2` to cap compute cost.
-- `STORAGE_BUCKET_NAME` and `ALLOWED_ORIGINS` env vars.
+- `--max-instances=1` — the async flow state lives in the process; a single
+  instance guarantees enqueue / process / poll all hit the same memory.
+- `--memory=4Gi` for the InsightFace model.
+- `ALLOWED_ORIGINS` env var. No secrets, no bucket, no Firestore.
 
 To enable API-key auth in production, add an `API_KEY` value to the
 `--set-env-vars` list in the workflow (and send it from the frontend).
@@ -152,18 +145,16 @@ To enable API-key auth in production, add an `API_KEY` value to the
 ### Deploy scripts
 
 The three API repos (`robles.ai-identity-api`, `robles.ai-rag-api`,
-`robles.ai-langchain-api`) share the same four scripts, each individualized:
+`robles.ai-langchain-api`) share the same deploy scripts, each individualized:
 
 | Script | Purpose |
 |--------|---------|
-| `deploy_fresh_gcp.sh` | Full first-time provisioning (APIs, secrets, repo, SA, deploy, domain) |
-| `update_docker.sh` | Code change: rotate secret + rebuild (Kaniko cache) + redeploy |
-| `rotate_secret.sh` | Secret-only rotation + reload on Cloud Run, **no rebuild** (seconds) |
+| `deploy_fresh_gcp.sh` | Full first-time provisioning (project, billing, APIs, repo, SAs, deploy, domain) |
+| `update_docker.sh` | Code change: rebuild (Kaniko cache) + redeploy — manual fallback |
 | `delete_all_gcp_resources.sh` | Tear down all GCP resources |
 
-Day-to-day deploys can also go through GitHub Actions. See
-**[AGENTS.md](./AGENTS.md)** for the full GCP resource inventory and a
-recreate-from-scratch runbook.
+Day-to-day deploys go through GitHub Actions. See **[AGENTS.md](./AGENTS.md)**
+for the full GCP resource inventory and a recreate-from-scratch runbook.
 
 ---
 
@@ -174,15 +165,15 @@ app/
   main.py                     # FastAPI app, CORS, /cron/verify-id, routers
   api/endpoints/recognition.py# /recognition/verify-id + /get/{id}
   services/
-    recognition_service.py    # InsightFace model + face comparison
+    recognition_service.py    # InsightFace model + comparison + base64 encode/decode
     cron_service.py           # async processing of pending requests
-    database_service.py       # upload processed images to Firebase Storage
-  database/config.py          # Firestore + Storage clients, key resolution
+    store.py                  # in-memory request store (replaces Firestore)
+  database/config.py          # loads .env in dev (no Firebase)
   utils/
     security.py               # anti-SSRF URL validation + optional API key
     response.py               # success/error response envelopes
     others.py                 # numpy→native type conversion
-Dockerfile                    # 3 cached layers: deps → model → app code
+Dockerfile                    # cached layers: deps → model → app code
 docker-compose.yml            # local run matching Cloud Run
 .github/workflows/deploy.yml  # CI/CD
 ```

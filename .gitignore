@@ -43,3 +43,8 @@ Thumbs.db
 
 # Firebase credentials
 firebase_key.json
+# GCP service-account keys — NEVER commit (CI/CD auth uses the GCP_SA_KEY repo secret)
+key.json
+gcp-sa-key.json
+*-sa-key.json
+*.serviceaccount.json

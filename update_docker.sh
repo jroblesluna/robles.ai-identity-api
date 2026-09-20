@@ -1,27 +1,17 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Actualizando código, secretos y redeploy en Cloud Run..."
-
-# ────────── SECRETOS ──────────
-# El secreto de este servicio es la clave de servicio de Firebase, que vive en
-# firebase_key.json (gitignored) — nunca lo escribas aquí. En Cloud Run se monta
-# como archivo en /secrets/FIREBASE_KEY.
-FIREBASE_KEY_PATH="./firebase_key.json"
-if [ ! -f "$FIREBASE_KEY_PATH" ]; then
-  echo "🛑 ERROR: $FIREBASE_KEY_PATH no encontrado. Colócalo antes de desplegar."
-  exit 1
-fi
+# Fallback manual: el camino normal de despliegue es CI/CD por push a main
+# (.github/workflows/deploy.yml). Este script rebuild + redeploy a mano.
+echo "🚀 Actualizando código y redeploy en Cloud Run..."
 
 # ────────── VARIABLES DEL PROYECTO ──────────
-PROJECT_ID="identityverifierapp"
+PROJECT_ID="robles-ai-identity-project"
 REGION="us-central1"
 SERVICE_NAME="identity-server"
 REPO_NAME="my-repo"
 IMAGE_NAME="identity-server"
 TAG="latest"
-SECRET_NAME="FIREBASE_KEY"
-STORAGE_BUCKET_NAME="identityverifierapp.firebasestorage.app"
 CLOUD_RUN_SA="cloud-run-sa"
 CLOUD_RUN_SA_EMAIL="$CLOUD_RUN_SA@$PROJECT_ID.iam.gserviceaccount.com"
 
@@ -29,25 +19,15 @@ CLOUD_RUN_SA_EMAIL="$CLOUD_RUN_SA@$PROJECT_ID.iam.gserviceaccount.com"
 echo "📁 Proyecto: $PROJECT_ID"
 gcloud config set project "$PROJECT_ID"
 
-# ────────── ACTUALIZAR SECRETO EN SECRET MANAGER ──────────
-echo "🔐 Creando o actualizando secreto $SECRET_NAME (valor oculto)..."
-if gcloud secrets describe "$SECRET_NAME" --project="$PROJECT_ID" > /dev/null 2>&1; then
-  echo "🟡 Secreto $SECRET_NAME ya existe. Actualizando..."
-  gcloud secrets versions add "$SECRET_NAME" --data-file="$FIREBASE_KEY_PATH" --project="$PROJECT_ID"
-else
-  echo "👤 Creando secreto $SECRET_NAME..."
-  gcloud secrets create "$SECRET_NAME" --data-file="$FIREBASE_KEY_PATH" --replication-policy="automatic" --project="$PROJECT_ID"
-fi
-
 # ────────── CONSTRUIR IMAGEN DOCKER ──────────
 echo "🔧 Construyendo imagen Docker (Kaniko cache) y subiendo a Artifact Registry..."
 # Uses cloudbuild.yaml with Kaniko layer caching: a code-only change reuses the
 # heavy cached layers (insightface install + baked buffalo_l model) and only
-# rebuilds the final COPY layer (~1 min instead of ~4-5). Kaniko caches layers
-# in the registry without pulling the whole (large) image first.
+# rebuilds the final COPY layer.
 gcloud builds submit --config cloudbuild.yaml --project="$PROJECT_ID" .
 
 # ────────── DESPLIEGUE EN CLOUD RUN ──────────
+# Sin Firebase: estado async en memoria (--max-instances=1), imágenes por base64.
 echo "🚀 Desplegando nueva versión del servicio..."
 gcloud run deploy "$SERVICE_NAME" \
   --project="$PROJECT_ID" \
@@ -55,9 +35,9 @@ gcloud run deploy "$SERVICE_NAME" \
   --region="$REGION" \
   --platform=managed \
   --memory=4Gi \
+  --max-instances=1 \
   --allow-unauthenticated \
   --service-account="$CLOUD_RUN_SA_EMAIL" \
-  --set-env-vars="STORAGE_BUCKET_NAME=$STORAGE_BUCKET_NAME" \
-  --set-secrets="/secrets/$SECRET_NAME=${SECRET_NAME}:latest"
+  --set-env-vars="^|^ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai"
 
-echo "✅ Código, secretos y variables actualizados y desplegados exitosamente."
+echo "✅ Código actualizado y desplegado exitosamente."

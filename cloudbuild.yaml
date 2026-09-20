@@ -11,3 +11,16 @@ steps:
       - '--cache=true'
       - '--cache-ttl=336h'          # reuse cached layers for up to 14 days
       - '--cache-repo=us-central1-docker.pkg.dev/$PROJECT_ID/my-repo/identity-server-cache'
+      # Snapshot only changed files with a smaller memory footprint. Parity with
+      # rag/langchain; avoids Kaniko OOM (exit 137) on this large image.
+      - '--snapshot-mode=redo'
+      - '--use-new-run'
+
+# Run the build on a bigger VM (parity with rag/langchain) so the heavy snapshot
+# of the InsightFace image has enough RAM; the default e2-standard VM can OOM.
+options:
+  machineType: 'E2_HIGHCPU_8'
+  diskSizeGb: 100
+
+# Give the dependency install + model download room on a cold cache.
+timeout: '3600s'

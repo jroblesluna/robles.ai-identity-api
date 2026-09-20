@@ -13,9 +13,17 @@ matching: compare a selfie against a photo ID and decide if they are the same
 person. It backs the public demo at `https://robles.ai/try-identity` (frontend
 lives in the separate `robles.ai` repo, page `src/pages/TryIdentity.tsx`).
 
-- FastAPI · Python 3.10 · InsightFace `buffalo_l` (CPU) · Firestore · Firebase Storage
-- Deployed on **Google Cloud Run**, project `identityverifierapp`, region `us-central1`
+- FastAPI · Python 3.10 · InsightFace `buffalo_l` (CPU) · **no external datastore**
+- Deployed on **Google Cloud Run**, project `robles-ai-identity-project`, region `us-central1`
 - Public URL: `https://identity-api.robles.ai` (Cloud Run domain mapping + CNAME to `ghs.googlehosted.com`)
+
+> **No Firebase.** This service previously used Firestore (request queue) and
+> Firebase Storage (processed images). Both were **removed** (2026-09). The queue
+> is now a process-local store (`app/services/store.py`) and images travel as
+> **base64** in the request/response — nothing is persisted. The service runs
+> `--max-instances=1` so a single instance owns the whole async flow. This makes
+> identity a pure Cloud Run service, homogeneous with rag-api / langchain-api,
+> and improves privacy (no biometric data stored anywhere).
 
 ## 2. The model — important conceptual note
 
@@ -25,78 +33,68 @@ only does **inference**: extract a 512-d embedding per face and compare.
 
 - Match logic: **cosine similarity** of the two embeddings; `match = similarity > 0.35`.
 - The response field is called `distance` but stores a **similarity** (higher = more alike). Frontend shows it as `distance * 100` %.
-- The model is downloaded by InsightFace on first use. The Dockerfile now
-  **bakes it into the image at build time** (a dedicated cached layer), so it is
-  not re-downloaded on code pushes and cold-starts are fast.
+- The model is baked into the Docker image at build time (a dedicated cached
+  layer), so it is not re-downloaded on code pushes and cold-starts are fast.
 
 If anyone says "reprocess/retrain the model" — there is nothing to retrain. What
 used to feel slow was **dependency install** + first-run model download, both
 now handled by Docker layer caching.
 
-## 3. Request flow (asynchronous)
+## 3. Request flow (asynchronous, in-memory)
 
 ```
 Client (TryIdentity.tsx)
-  │  uploads selfie + ID to Firebase Storage, gets public URLs
+  │  converts selfie + ID to base64 (canvas, downscaled) — no upload anywhere
   ▼
-POST /recognition/verify-id  {faceImageUrl, cardIdImageUrl, callback}
-  │  → creates Firestore doc in collection "request", status="pending"
+POST /recognition/verify-id  {faceImageBase64, cardIdImageBase64, callback}
+  │  → store.create_request(): in-memory doc, status="pending"
   ▼
 POST /cron/verify-id   (triggered by the frontend right after)
-  │  → run_cron_verify_id(): finds pending docs, for each:
-  │      1. read_image_from_url() both images
+  │  → run_cron_verify_id(): store.list_pending(), for each:
+  │      1. decode_base64_to_cv2() both images
   │      2. compare_verify_faces() with InsightFace
-  │      3. upload_image_cv2() the 4 result images to Storage
-  │      4. POST result to the doc's callback URL
+  │      3. encode_cv2_to_base64() the 4 result images (data-URIs)
+  │      4. POST result to the doc's callback URL (if provided)
   │      5. update status → completed / completed_with_errors / failed
   ▼
 GET /recognition/get/{id}   (frontend polls every 3s until terminal status)
+      → base64 INPUT images are redacted in the response (kept out of the log)
 ```
 
 Status lifecycle: `pending → started → partially_completed → completed`
 (`failed` / `completed_with_errors` on problems).
 
 Result `output` contains: `result_match` (bool), `distance` (similarity), and 4
-image URLs: `FaceImageCV2`, `CardImageCV2`, `FaceLandMarksImage`,
-`CardLandMarksImage`.
+base64 data-URIs: `FaceImageCV2`, `CardImageCV2`, `FaceLandMarksImage`,
+`CardLandMarksImage`. The frontend renders these directly in `<img src>`.
 
 ## 4. Data stores
 
-- **Firestore** — collection `request` (one doc per verification). Also
-  `cronLocks/taskLock` (see cron locking below).
-- **Firebase Storage** — bucket `identityverifierapp.firebasestorage.app`.
-  Processed images go under `images/`. Frontend uploads go under `demo-uploads/`.
-  ⚠️ Images are **never deleted** → the bucket grows forever. This once caused a
-  `storage/quota-exceeded` outage. Consider a lifecycle rule to expire old objects.
+- **None external.** The request queue is `app/services/store.py`: a process-local
+  `dict` guarded by a `threading.Lock`, plus an `asyncio.Lock` (`cron_lock`) to
+  serialize cron runs. `update_request` supports dotted keys (`data.output.x`) to
+  mimic the previous Firestore update shape.
+- State is **not durable** — it lives only for the instance's lifetime. That's
+  intended for a demo (requests resolve in seconds; no history needed). Requires
+  `--max-instances=1` so enqueue / process / poll hit the same instance.
 
 ## 5. Auth to GCP / credentials
 
-- `app/database/config.py::get_firebase_key_path()` resolves the service-account
-  key: uses `/secrets/FIREBASE_KEY` if present (Cloud Run secret mount), else
-  `FIREBASE_KEY_PATH` env / local `firebase_key.json`.
-- On Cloud Run the secret is mounted **pinned to version `:1`** (not `latest`).
-  Using `latest` caused ~$3.48/mo in Secret Manager access charges; pinning fixed it.
-- `firebase_key.json` is gitignored — never commit it. It comes from the Firebase
-  Admin SDK SA (`firebase-adminsdk-fbsvc@…`): Firebase console → Project settings
-  → Service accounts → Generate new private key.
+There is **no Firebase key and no GCP Secret Manager secret** anymore. The only
+credential is the CI/CD one:
 
-### Secrets — two different things (don't confuse them)
-- **`FIREBASE_KEY`** — the only **GCP Secret Manager** secret. The Firebase SA
-  JSON. Mounted at `/secrets/FIREBASE_KEY:1` on Cloud Run.
-- **`GCP_SA_KEY`** — a **GitHub Actions** secret (not in GCP). Key for the
-  `github-deployer` SA that lets CI/CD deploy. Set via `gh secret set`.
+- **`GCP_SA_KEY`** — a **GitHub Actions** secret (not in GCP). JSON key for the
+  `github-deployer` SA that lets CI/CD build + deploy. Set via `gh secret set`
+  (see README → Deployment). `key.json` / `gcp-sa-key.json` are gitignored.
 
-Full GCP resource inventory + recreate-from-scratch runbook: see sections 12–13 below.
-
-## 6. Security posture (added 2026-09)
+## 6. Security posture
 
 `app/utils/security.py` centralizes two protections:
 
-- **Anti-SSRF** (`validate_image_url`): before the server fetches any user-supplied
-  image URL, it checks scheme is http(s), host is in an allowlist (Firebase/GCS by
-  default, extend via `ALLOWED_IMAGE_HOSTS`), and the host does **not** resolve to
-  a private/loopback/link-local IP. Prevents fetching cloud metadata / internal
-  services. `requests.get` now also has `IMAGE_FETCH_TIMEOUT`.
+- **Anti-SSRF** (`validate_image_url`): guards the legacy `read_image_from_url`
+  helper (kept but no longer on the main path, since inputs are base64 now). If
+  URL-based fetching is re-enabled, it checks scheme, host allowlist, and blocks
+  private/loopback IPs.
 - **Optional API key** (`require_api_key`): a router dependency. **No-op unless
   `API_KEY` env is set**, so the current keyless frontend keeps working. When set,
   requests must send `X-API-Key`. Note: a key in a public frontend is not secret —
@@ -105,121 +103,103 @@ Full GCP resource inventory + recreate-from-scratch runbook: see sections 12–1
 CORS is restricted (`main.py`) to robles.ai + localhost, extendable via
 `ALLOWED_ORIGINS`. Do **not** revert to `allow_origins=["*"]` with credentials.
 
-Still open (needs frontend coordination): real auth, and signed/expiring URLs
-for the biometric images (currently public Storage URLs with a token, no expiry —
-a privacy concern for face/ID data).
-
 ## 7. Cron locking
 
-`/cron/verify-id` uses a Firestore lock doc `cronLocks/taskLock`. It stores
-`locked` + `locked_at`. A lock older than `CRON_LOCK_STALE_SECONDS` (default 600)
-is treated as stale and reclaimed — this prevents a crashed run from wedging the
-cron forever. There is no Cloud Scheduler; the cron is triggered by the frontend
-`fetch` after creating a request.
+`/cron/verify-id` serializes with the in-process `store.cron_lock`
+(`asyncio.Lock`). If a run is already in progress it returns
+`"Task already running."`. With `--max-instances=1` this single lock is enough —
+no distributed lock needed (the old Firestore `cronLocks/taskLock` was removed).
+There is no Cloud Scheduler; the cron is triggered by the frontend `fetch` after
+creating a request.
 
 ## 8. Build & deploy
 
-- **Dockerfile** has 3 cache-friendly layers, in order:
+- **Dockerfile** has cache-friendly layers, in order:
   1. `requirements.txt` + `pip install`  (deps)
   2. pre-download InsightFace `buffalo_l` (model)
   3. `COPY . /app`                        (app code)
-  Code-only pushes reuse layers 1–2, so builds stay fast. Only changing
-  `requirements.txt` rebuilds deps + model.
+  Code-only pushes reuse layers 1–2, so builds stay fast.
 - **CI/CD**: `.github/workflows/deploy.yml` runs on push to `main` → Cloud Build
   builds the image (tags `:$GITHUB_SHA` and `:latest`) → `gcloud run deploy`.
   Requires the `GCP_SA_KEY` GitHub secret (setup steps in README → Deployment).
-- Deploy flags fixed by the workflow: `--memory=4Gi`, `--max-instances=2`,
-  `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS` env, secret `FIREBASE_KEY:1`.
-- Manual scripts — identical set/names across the three API repos
+  Until that secret exists, the workflow runs but fails at the "Authenticate to
+  Google Cloud" step — expected.
+- Deploy flags fixed by the workflow: `--memory=4Gi`, `--max-instances=1`,
+  `--allow-unauthenticated`, `ALLOWED_ORIGINS` env. **No secrets, no bucket.**
+- Note: unlike rag/langchain (Kaniko via `cloudbuild.yaml`), the identity
+  **workflow** builds with a direct `--tag` — its image (InsightFace + baked
+  buffalo_l) is large enough that pulling a cache is slower than a rebuild. The
+  `cloudbuild.yaml` (Kaniko) still exists and is used by `update_docker.sh`.
+- Manual scripts — shared set/names across the three API repos
   (`robles.ai-identity-api`, `robles.ai-rag-api`, `robles.ai-langchain-api`),
-  each individualized to its project. All non-interactive and pass `--project`
-  explicitly:
-  - `deploy_fresh_gcp.sh` — full first-time provisioning (APIs, secrets, Artifact
-    Registry, service account + IAM, build, deploy, domain mapping).
-  - `update_docker.sh` — code changes: rotate the `FIREBASE_KEY` secret from
-    `firebase_key.json`, rebuild the image (Kaniko cache), redeploy.
-  - `rotate_secret.sh` — **secret-only** rotation: push a new `FIREBASE_KEY`
-    version and roll Cloud Run onto it **without rebuilding** (seconds, not
-    minutes). Use this when only the credential changed.
-  - `delete_all_gcp_resources.sh` — teardown.
-
-  Builds go through `cloudbuild.yaml` using **Kaniko** layer caching: it caches
-  individual layers in Artifact Registry (`*-cache` repo) WITHOUT pulling the
-  whole large image, so a code-only change reuses the heavy layers (insightface
-  install + baked `buffalo_l` model) and only rebuilds the final `COPY` layer
-  (~1 min vs ~4-5). Day-to-day can also use the GitHub Actions workflow.
+  each individualized to its project. Non-interactive, pass `--project` explicitly:
+  - `deploy_fresh_gcp.sh` — full first-time provisioning: **creates the GCP
+    project if missing + links billing**, enables APIs, Artifact Registry,
+    runtime SA + `github-deployer` CI/CD SA + IAM, build, deploy, domain mapping.
+  - `update_docker.sh` — code changes: rebuild the image (Kaniko cache), redeploy.
+    Manual fallback to CI/CD.
+  - `delete_all_gcp_resources.sh` — teardown (Cloud Run, repo, SAs, domain).
 
 ## 9. Conventions & gotchas
 
 - **dlib / face_recognition are dead code.** The service migrated to InsightFace;
-  all `face_recognition` usage is commented out. The old `dlib-precompiled/` dir
-  was removed from the repo (2026-09). Note: `insightface` compiles a native
-  wheel, so the Dockerfile installs `build-essential` + `g++`.
-- **Emotions was removed** (2026-09-13). Endpoints `/emotions/get-image-emotions`
-  and `/emotions/get-video-emotions` used `py-feat`, which pulled `torch` + the
-  full NVIDIA CUDA stack (~4 GB) into this CPU-only image — bloating it and
-  slowing builds. That code (`_archived/emotions/`) was removed from the repo
-  (2026-09). If revived, deploy it as a **separate** Cloud Run service with its
-  own repo/requirements — do NOT add it back here.
+  all `face_recognition` usage is commented out. Note: `insightface` compiles a
+  native wheel, so the Dockerfile installs `build-essential` + `g++`.
+- **Emotions was removed** (2026-09-13). Endpoints `/emotions/*` used `py-feat`,
+  which pulled `torch` + the full NVIDIA CUDA stack (~4 GB) into this CPU-only
+  image. If revived, deploy it as a **separate** Cloud Run service — do NOT add
+  it back here.
 - `output` field `distance` = similarity, not distance (naming is misleading).
-- `conect_to_firestoreDataBase` has a typo in its name — kept for compatibility;
-  don't rename without updating all call sites.
+- Images are exchanged as base64. Input images are **redacted** in
+  `GET /get/{id}` responses (`_serialize` in `recognition.py`); the frontend
+  additionally truncates the base64 OUTPUT images in its on-screen log
+  (`redactForLog`), while still rendering them in the result grid.
 - Responses use envelopes from `utils/response.py`: `{success, code, message, data}`.
-- No formal test suite. Validate `utils/security.py` logic with a lightweight
-  script + a venv with just `fastapi` (the full deps are heavy).
+  Nesting the frontend relies on: response `data` = the request doc, so
+  `data.data.status`, `data.data.success`, `data.data.data.output.*`.
+- No formal test suite. Validate `utils/security.py` / `store.py` logic with a
+  lightweight script + a venv with just `fastapi` (the full deps are heavy).
 
 ## 10. Related repos
 
 - **Frontend**: `robles.ai` repo → `src/pages/TryIdentity.tsx` calls this API and
-  uploads images to Firebase Storage. i18n keys under `try-identity` in
-  `src/i18n/locales/{en,es}/translation.json`.
+  sends images as base64. i18n keys under `try-identity` in
+  `src/i18n/locales/{en,es}/translation.json`. (Note: `TryMedical.tsx` still uses
+  Firebase Storage via `src/lib/firebaseConfig.ts` — a different demo, out of
+  scope here.)
 
 ## 12. GCP resource inventory (disaster recovery)
 
-Verified against the live project on 2026-09-13.
-
 | Item | Value |
 |------|-------|
-| GCP project ID | `identityverifierapp` |
+| GCP project ID | `robles-ai-identity-project` |
 | Region | `us-central1` |
-| Billing | **Blaze (pay-as-you-go)** — required for Cloud Storage. On US billing account `01817C-24FBFE-66BA22`. Keep a budget + alerts (~$5/mo). |
+| Billing | Pay-as-you-go on US billing account `01817C-24FBFE-66BA22`. Keep a budget + alerts (~$5/mo). |
 | Public URL | `https://identity-api.robles.ai` |
 
 **Cost expectation:** at rest ~$0/mo (Cloud Run scales to zero + free tier;
-Firestore/Storage within free quotas; Secret Manager minimal; Artifact Registry
-a few cents for the image). Real cost only under sustained traffic (capped by
-`--max-instances=2`). Blaze is pay-as-you-go, not free-forever — set a budget.
+Artifact Registry a few cents for the image). Real cost only under sustained
+traffic (capped by `--max-instances=1`).
 
-**Enabled APIs (relevant):** `run`, `firestore`, `secretmanager`,
-`artifactregistry`, `cloudbuild`, `firebasestorage`, `storage`, `iam`,
-`firebase` (all `.googleapis.com`).
+**Enabled APIs (relevant):** `run`, `artifactregistry`, `cloudbuild`,
+`secretmanager`, `iam`, `compute` (all `.googleapis.com`). No Firestore /
+Firebase Storage APIs needed anymore.
 
-**Cloud Run:** service `identity-server`, memory `4Gi`, `--max-instances=2`,
-`--allow-unauthenticated`, env `STORAGE_BUCKET_NAME` + `ALLOWED_ORIGINS`, secret
-mount `/secrets/FIREBASE_KEY ← FIREBASE_KEY:1`, runs as
-`cloud-run-sa@identityverifierapp.iam.gserviceaccount.com`. Domain mapping
+**Cloud Run:** service `identity-server`, memory `4Gi`, `--max-instances=1`,
+`--allow-unauthenticated`, env `ALLOWED_ORIGINS`, runs as
+`cloud-run-sa@robles-ai-identity-project.iam.gserviceaccount.com`. Domain mapping
 `identity-api.robles.ai → identity-server` (DNS: CNAME `identity-api →
 ghs.googlehosted.com.`).
 
 **Service accounts:**
 | Email | Use |
 |-------|-----|
-| `cloud-run-sa@…` | Runtime SA; has `secretmanager.secretAccessor` + `run.invoker` |
-| `firebase-adminsdk-fbsvc@…` | Firebase Admin SDK SA — source of `firebase_key.json` |
-| `105527807738-compute@…` | Default compute SA |
+| `cloud-run-sa@…` | Runtime SA (`run.invoker`) |
 | `github-deployer@…` | CI/CD deployer (create per README → Deployment) |
 
-**Secret Manager:** only `FIREBASE_KEY` (Firebase SA JSON). Mounted `:1` on
-Cloud Run — do not use `latest` (caused ~$3.48/mo in access charges).
+**Secret Manager:** none required by the service anymore.
 
-**Firestore:** Native mode. Collections `request` (one doc per verification) and
-`cronLocks/taskLock`.
-
-**Firebase Storage:** bucket `identityverifierapp.firebasestorage.app`; prefixes
-`demo-uploads/` (frontend) + `images/` (processed). ⚠️ No lifecycle rule yet.
-
-**Artifact Registry (us-central1):** `my-repo` (identity-server image),
-`rag-api-repo` (other service), `cloud-run-source-deploy` (leftover).
+**Artifact Registry (us-central1):** `my-repo` (identity-server image).
 
 **TLS / domain:** `robles.ai` must stay **verified in Google Search Console**
 (TXT `google-site-verification=...` in DNS) AND the CNAME must resolve, or the
@@ -228,36 +208,21 @@ expire (`ERR_CERT_DATE_INVALID`) — keep both DNS records in place.
 
 ## 13. Recreate from scratch (ordered runbook)
 
-Requires `gcloud` + Blaze billing linked + the Firebase Admin `firebase_key.json`.
+`deploy_fresh_gcp.sh` now bootstraps everything (including creating the GCP
+project and linking billing). No Firebase setup, no manual console steps.
 
 ```bash
-PROJECT_ID=identityverifierapp
-REGION=us-central1
+# 0. Authenticate gcloud (interactive, on your machine):
+gcloud auth login
 
-# 1. Enable APIs
-gcloud services enable \
-  run.googleapis.com firestore.googleapis.com secretmanager.googleapis.com \
-  artifactregistry.googleapis.com cloudbuild.googleapis.com \
-  firebasestorage.googleapis.com storage.googleapis.com iam.googleapis.com \
-  --project=$PROJECT_ID
-
-# 2. Firestore (Native mode)
-gcloud firestore databases create --location=$REGION --project=$PROJECT_ID
-
-# 3. Firebase Storage bucket — via Firebase console (Storage → Get started),
-#    requires Blaze. Bucket: identityverifierapp.firebasestorage.app
-
-# 4. Firebase Admin key — Firebase console → Project settings → Service accounts
-#    → Generate new private key → save as firebase_key.json (gitignored)
-
-# 5. Artifact Registry repo, cloud-run-sa, secret, IAM, Cloud Run deploy and
-#    domain mapping are handled by:
+# 1. Provision everything (creates project + billing + APIs + repo + SAs +
+#    build + deploy + domain mapping). Idempotent.
 ./deploy_fresh_gcp.sh
 
-# 6. DNS: CNAME identity-api → ghs.googlehosted.com.  (+ keep the Search Console
+# 2. DNS: CNAME identity-api → ghs.googlehosted.com.  (+ keep the Search Console
 #    TXT verification record). Cloud Run provisions the TLS cert automatically.
 
-# 7. CI/CD: create github-deployer SA + GCP_SA_KEY secret (README → Deployment)
+# 3. CI/CD: create the github-deployer key + GCP_SA_KEY secret (README → Deployment)
 ```
 
 Verify: `curl https://identity-api.robles.ai/` after DNS + cert.
@@ -267,15 +232,16 @@ Verify: `curl https://identity-api.robles.ai/` after DNS + cert.
 - **Artifact Registry cleanup** — CI/CD pushes one image per commit; add a
   cleanup policy to keep only the N most recent:
   `gcloud artifacts repositories set-cleanup-policies my-repo --location=us-central1 --policy=<policy.json>`
-- **Storage lifecycle** — expire old demo/processed images:
-  `gcloud storage buckets update gs://identityverifierapp.firebasestorage.app --lifecycle-file=lifecycle.json`
 - **Billing budget** — Console → Billing → Budgets & alerts → ~$5/mo, alerts at 50/90/100%.
 
 ## 11. Change log (high level)
 
-- **2026-09**: Removed emotions/py-feat; slimmed Dockerfile (no dlib), 3-layer
+- **2026-09 (later)**: **Removed Firebase entirely** (Firestore + Storage). Async
+  queue moved in-process (`store.py`), images exchanged as base64, `--max-instances=1`.
+  Deleted `database_service.py`, `env.py`, `rotate_secret.sh`, `updateLocked.js`;
+  dropped `google-cloud-firestore` + `firebase-admin` from requirements. Renamed
+  GCP project `identityverifierapp → robles-ai-identity-project`; `deploy_fresh_gcp.sh`
+  now bootstraps the project + billing. Now homogeneous with rag/langchain.
+- **2026-09**: Removed emotions/py-feat; slimmed Dockerfile (no dlib), layer
   caching + baked model; added anti-SSRF + optional API key + tightened CORS;
-  cron lock TTL; GitHub Actions CI/CD; docker-compose. Consolidated docs into
-  README + AGENTS. Migrated GCP billing to a US account; pinned FIREBASE_KEY
-  secret to `:1`; capped `--max-instances=2`; re-verified `robles.ai` domain and
-  reissued the expired TLS cert.
+  GitHub Actions CI/CD; docker-compose. Consolidated docs into README + AGENTS.
