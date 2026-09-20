@@ -99,6 +99,7 @@ if ! gcloud iam service-accounts describe "$CLOUD_RUN_SA_EMAIL" --project="$PROJ
     gcloud iam service-accounts describe "$CLOUD_RUN_SA_EMAIL" --project="$PROJECT_ID" > /dev/null 2>&1 && break
     sleep 5
   done
+  sleep 8
 else
   echo "🟢 Cuenta de servicio '$CLOUD_RUN_SA' ya existe."
 fi
@@ -127,6 +128,7 @@ if ! gcloud iam service-accounts describe "$CI_SA_EMAIL" --project="$PROJECT_ID"
     gcloud iam service-accounts describe "$CI_SA_EMAIL" --project="$PROJECT_ID" > /dev/null 2>&1 && break
     sleep 5
   done
+  sleep 8
 fi
 for ROLE in roles/run.admin roles/artifactregistry.writer roles/secretmanager.secretAccessor; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
