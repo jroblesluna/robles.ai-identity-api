@@ -130,9 +130,9 @@ creating a request.
   **workflow** builds with a direct `--tag` — its image (InsightFace + baked
   buffalo_l) is large enough that pulling a cache is slower than a rebuild. The
   `cloudbuild.yaml` (Kaniko) still exists and is used by `update_docker.sh`.
-- Manual scripts — shared set/names across the three API repos
-  (`robles.ai-identity-api`, `robles.ai-rag-api`, `robles.ai-langchain-api`),
-  each individualized to its project. Non-interactive, pass `--project` explicitly:
+- Manual scripts — shared set/names across the four API repos
+  (`robles.ai-identity-api`, `robles.ai-rag-api`, `robles.ai-langchain-api`,
+  `robles.ai-transcription-api`), each individualized to its project. Non-interactive, pass `--project` explicitly:
   - `deploy_fresh_gcp.sh` — full first-time provisioning: **creates the GCP
     project if missing + links billing**, enables APIs, Artifact Registry,
     runtime SA + `github-deployer` CI/CD SA + IAM, build, deploy, domain mapping.
@@ -167,6 +167,9 @@ creating a request.
   `src/i18n/locales/{en,es}/translation.json`. (Note: `TryMedical.tsx` still uses
   Firebase Storage via `src/lib/firebaseConfig.ts` — a different demo, out of
   scope here.)
+- **Sibling APIs**: `robles.ai-rag-api`, `robles.ai-langchain-api`,
+  `robles.ai-transcription-api` — same GCP region, same deploy-script pattern,
+  same `cloud-run-sa` / `github-deployer` SA naming.
 
 ## 12. GCP resource inventory (disaster recovery)
 

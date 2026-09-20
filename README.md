@@ -144,8 +144,9 @@ To enable API-key auth in production, add an `API_KEY` value to the
 
 ### Deploy scripts
 
-The three API repos (`robles.ai-identity-api`, `robles.ai-rag-api`,
-`robles.ai-langchain-api`) share the same deploy scripts, each individualized:
+The four API repos (`robles.ai-identity-api`, `robles.ai-rag-api`,
+`robles.ai-langchain-api`, `robles.ai-transcription-api`) share the same deploy
+scripts, each individualized:
 
 | Script | Purpose |
 |--------|---------|
