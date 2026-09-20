@@ -1,10 +1,16 @@
 name: Deploy to Cloud Run
 
-# CI/CD: on every push to main, build the image with Cloud Build (Kaniko layer
-# caching via cloudbuild.yaml) and deploy it to Cloud Run. Mirrors update_docker.sh
-# but runs automatically. First-time GCP resource creation is done manually with
-# deploy_fresh_gcp.sh (which also creates the github-deployer SA used here).
-# Homogeneous with rag/langchain: same Kaniko cloudbuild.yaml build path.
+# CI/CD: on every push to main, build the image ON THE RUNNER with docker and
+# push it to Artifact Registry, then deploy to Cloud Run. First-time GCP resource
+# creation is done manually with deploy_fresh_gcp.sh (which also creates the
+# github-deployer SA used here). Homogeneous with rag/langchain.
+#
+# NOTE: we build with `docker build` on the runner instead of `gcloud builds
+# submit` (Cloud Build). Under this org, the github-deployer SA is blocked from
+# using Cloud Build's staging bucket ("forbidden from accessing the bucket
+# ..._cloudbuild"), so building on the runner and pushing directly to Artifact
+# Registry sidesteps that org restriction entirely. deploy_fresh_gcp.sh still
+# uses Cloud Build locally (run as the owner, who is allowed).
 on:
   push:
     branches: [main]
@@ -35,17 +41,21 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Build image with Cloud Build (Kaniko cache)
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+
+      - name: Build & push image (docker on runner → Artifact Registry)
         run: |
-          gcloud builds submit \
-            --project="$PROJECT_ID" \
-            --config cloudbuild.yaml .
+          IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME"
+          docker build -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
 
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "$SERVICE_NAME" \
             --project="$PROJECT_ID" \
-            --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:latest" \
+            --image="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$GITHUB_SHA" \
             --region="$REGION" \
             --platform=managed \
             --allow-unauthenticated \

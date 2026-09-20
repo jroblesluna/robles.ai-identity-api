@@ -128,7 +128,7 @@ if ! gcloud iam service-accounts describe "$CI_SA_EMAIL" --project="$PROJECT_ID"
     sleep 5
   done
 fi
-for ROLE in roles/run.admin roles/cloudbuild.builds.editor roles/artifactregistry.writer roles/secretmanager.secretAccessor roles/serviceusage.serviceUsageConsumer; do
+for ROLE in roles/run.admin roles/cloudbuild.builds.editor roles/artifactregistry.writer roles/secretmanager.secretAccessor roles/serviceusage.serviceUsageConsumer roles/storage.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:$CI_SA_EMAIL" --role="$ROLE" --quiet || true
 done
