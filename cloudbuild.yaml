@@ -7,10 +7,10 @@
 steps:
   - name: 'gcr.io/kaniko-project/executor:latest'
     args:
-      - '--destination=us-central1-docker.pkg.dev/$PROJECT_ID/my-repo/identity-server:latest'
+      - '--destination=us-central1-docker.pkg.dev/$PROJECT_ID/identity-api-repo/identity-server:latest'
       - '--cache=true'
       - '--cache-ttl=336h'          # reuse cached layers for up to 14 days
-      - '--cache-repo=us-central1-docker.pkg.dev/$PROJECT_ID/my-repo/identity-server-cache'
+      - '--cache-repo=us-central1-docker.pkg.dev/$PROJECT_ID/identity-api-repo/identity-server-cache'
       # Snapshot only changed files with a smaller memory footprint. Parity with
       # rag/langchain; avoids Kaniko OOM (exit 137) on this large image.
       - '--snapshot-mode=redo'

@@ -9,7 +9,7 @@ echo "🚀 Actualizando código y redeploy en Cloud Run..."
 PROJECT_ID="robles-ai-identity-project"
 REGION="us-central1"
 SERVICE_NAME="identity-server"
-REPO_NAME="my-repo"
+REPO_NAME="identity-api-repo"
 IMAGE_NAME="identity-server"
 TAG="latest"
 CLOUD_RUN_SA="cloud-run-sa"
@@ -41,3 +41,8 @@ gcloud run deploy "$SERVICE_NAME" \
   --set-env-vars="^|^ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai"
 
 echo "✅ Código actualizado y desplegado exitosamente."
+
+# ── Poda del Artifact Registry ───────────────────────────────────────────────
+# Borra las imágenes que ya no se usan y deja registrada la cleanup policy.
+# No aborta el despliegue si falla (el deploy ya terminó bien a esta altura).
+bash "$(dirname "$0")/prune_registry.sh" || echo "⚠️  La poda del registry falló; el despliegue sigue siendo válido."

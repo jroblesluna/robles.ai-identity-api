@@ -202,7 +202,7 @@ ghs.googlehosted.com.`).
 
 **Secret Manager:** none required by the service anymore.
 
-**Artifact Registry (us-central1):** `my-repo` (identity-server image).
+**Artifact Registry (us-central1):** `identity-api-repo` (identity-server image).
 
 **TLS / domain:** `robles.ai` must stay **verified in Google Search Console**
 (TXT `google-site-verification=...` in DNS) AND the CNAME must resolve, or the
@@ -234,7 +234,7 @@ Verify: `curl https://identity-api.robles.ai/` after DNS + cert.
 
 - **Artifact Registry cleanup** — CI/CD pushes one image per commit; add a
   cleanup policy to keep only the N most recent:
-  `gcloud artifacts repositories set-cleanup-policies my-repo --location=us-central1 --policy=<policy.json>`
+  `gcloud artifacts repositories set-cleanup-policies identity-api-repo --location=us-central1 --policy=<policy.json>`
 - **Billing budget** — Console → Billing → Budgets & alerts → ~$5/mo, alerts at 50/90/100%.
 
 ## 11. Change log (high level)

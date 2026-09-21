@@ -19,7 +19,7 @@ on:
 env:
   PROJECT_ID: robles-ai-identity-project
   REGION: us-central1
-  REPO_NAME: my-repo
+  REPO_NAME: identity-api-repo
   SERVICE_NAME: identity-server
   IMAGE_NAME: identity-server
   RUNTIME_SA: cloud-run-sa@robles-ai-identity-project.iam.gserviceaccount.com
@@ -63,6 +63,10 @@ jobs:
             --max-instances=1 \
             --service-account="$RUNTIME_SA" \
             --set-env-vars="^|^ALLOWED_ORIGINS=https://robles.ai,https://www.robles.ai"
+
+      - name: Prune old images from Artifact Registry
+        continue-on-error: true
+        run: bash prune_registry.sh
 
       - name: Show service URL
         run: |

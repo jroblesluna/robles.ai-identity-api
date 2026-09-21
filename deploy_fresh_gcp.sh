@@ -5,7 +5,7 @@ set -e
 PROJECT_ID="robles-ai-identity-project"
 REGION="us-central1"
 SERVICE_NAME="identity-server"
-REPO_NAME="my-repo"
+REPO_NAME="identity-api-repo"
 IMAGE_NAME="identity-server"
 TAG="latest"
 CLOUD_RUN_SA="cloud-run-sa"
@@ -172,3 +172,8 @@ gcloud beta run domain-mappings create \
   --platform=managed || echo "ℹ️ Ya está configurado."
 
 echo -e "\n🎉 ✅ ¡Despliegue exitoso de '$SERVICE_NAME' en Cloud Run!"
+
+# ── Poda del Artifact Registry ───────────────────────────────────────────────
+# Borra las imágenes que ya no se usan y deja registrada la cleanup policy.
+# No aborta el despliegue si falla (el deploy ya terminó bien a esta altura).
+bash "$(dirname "$0")/prune_registry.sh" || echo "⚠️  La poda del registry falló; el despliegue sigue siendo válido."

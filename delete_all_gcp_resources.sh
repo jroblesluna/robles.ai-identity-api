@@ -3,7 +3,7 @@ set -e
 
 PROJECT_ID="robles-ai-identity-project"
 REGION="us-central1"
-REPO_NAME="my-repo"
+REPO_NAME="identity-api-repo"
 SERVICE_NAME="identity-server"
 CLOUD_RUN_SA="cloud-run-sa"
 CLOUD_RUN_SA_EMAIL="$CLOUD_RUN_SA@$PROJECT_ID.iam.gserviceaccount.com"
